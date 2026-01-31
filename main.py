@@ -312,7 +312,7 @@ def build_mode_instruction(mode: str) -> str:
     elif normalized == "evaluation":
         normalized = "phase_4"
 
-        if normalized == "phase_0":
+    if normalized == "phase_0":
         return (
             "You are in Phase 0 – Entry & Orchestration. "
             "Your job is to quickly understand the user's context and maturity, "
@@ -353,7 +353,7 @@ def build_mode_instruction(mode: str) -> str:
 
     if normalized == "phase_3":
         return (
-            'You are now strictly in Phase 3 – Scenario, MEL & Materials. '
+            "You are now strictly in Phase 3 – Scenario, MEL & Materials. "
             "Do NOT redo Phase 1 or Phase 2, except for very short clarifications. "
             "Assume that a basic context and exercise objectives exist, from which you can "
             "build a narrative scenario and a Master Events List (MEL). "
