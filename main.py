@@ -80,7 +80,14 @@ Special guidance for Phase 0:
   (3) key stakeholders and participants,
   (4) main objectives or problems they want to address,
   (5) any important constraints (time, resources, experience).
-- After the user answers, summarise what you understood and explicitly recommend which phase button (Phase 1 or Phase 2) they should click next, explaining why.
+
+- If the user ALREADY provided rich context (organisation, hazard, stakeholders, objectives, constraints) OR explicitly writes that they want to “go directly to Phase 2” (or Phase 1, 3 or 4), you must:
+  (1) briefly summarise what you understood,
+  (2) state clearly whether their information is sufficient to move directly to that phase,
+  (3) if it is sufficient, explicitly recommend: “You can now click the Phase X button in the interface to continue there.”
+  (4) if it is NOT sufficient, explain what is still missing and recommend starting from Phase 1 instead.
+
+- After the user answers your Phase 0 questions, always summarise what you understood and explicitly recommend which phase button (Phase 1 or Phase 2) they should click next, explaining why.
 - Do not start designing objectives, scenarios or MEL in Phase 0: only collect information and orient the user.
 """
 
