@@ -80,14 +80,7 @@ Special guidance for Phase 0:
   (3) key stakeholders and participants,
   (4) main objectives or problems they want to address,
   (5) any important constraints (time, resources, experience).
-
-- If the user ALREADY provided rich context (organisation, hazard, stakeholders, objectives, constraints) OR explicitly writes that they want to “go directly to Phase 2” (or Phase 1, 3 or 4), you must:
-  (1) briefly summarise what you understood,
-  (2) state clearly whether their information is sufficient to move directly to that phase,
-  (3) if it is sufficient, explicitly recommend: “You can now click the Phase X button in the interface to continue there.”
-  (4) if it is NOT sufficient, explain what is still missing and recommend starting from Phase 1 instead.
-
-- After the user answers your Phase 0 questions, always summarise what you understood and explicitly recommend which phase button (Phase 1 or Phase 2) they should click next, explaining why.
+- After the user answers, summarise what you understood and explicitly recommend which phase button (Phase 1 or Phase 2) they should click next, explaining why.
 - Do not start designing objectives, scenarios or MEL in Phase 0: only collect information and orient the user.
 """
 
@@ -97,6 +90,10 @@ BASE_DIR = Path(__file__).resolve().parent
 GLOBAL_KB_PATH = BASE_DIR / "global_kb.json"
 UPLOAD_ROOT = BASE_DIR / "uploaded_files"
 UPLOAD_ROOT.mkdir(exist_ok=True)
+
+# New root for project memory
+MEMORY_ROOT = BASE_DIR / "project_memory"
+MEMORY_ROOT.mkdir(exist_ok=True)
 
 
 # -----------------------------
@@ -155,7 +152,6 @@ def build_global_kb_context() -> Optional[str]:
     if not GLOBAL_KB:
         return None
 
-    # Currently the number of KB documents is manageable, so include all.
     docs = GLOBAL_KB
 
     parts: List[str] = [
@@ -296,6 +292,197 @@ def summarise_uploaded_document(client: OpenAI, filename: str, raw_text: str) ->
 
 
 # -----------------------------
+# Project memory management
+# -----------------------------
+
+def project_memory_path(project_id: str) -> Path:
+    return MEMORY_ROOT / f"{project_id}_memory.json"
+
+
+def _empty_memory() -> Dict[str, Any]:
+    return {
+        "phase_0": [],
+        "phase_1": [],
+        "phase_2": [],
+        "phase_3": [],
+        "phase_4": [],
+        "last_updated": None,
+    }
+
+
+def load_project_memory(project_id: str) -> Dict[str, Any]:
+    path = project_memory_path(project_id)
+    if not path.exists():
+        return _empty_memory()
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        # ensure keys exist
+        base = _empty_memory()
+        if isinstance(data, dict):
+            base.update(data)
+        return base
+    except Exception:
+        return _empty_memory()
+
+
+def save_project_memory(project_id: str, memory: Dict[str, Any]) -> None:
+    path = project_memory_path(project_id)
+    with path.open("w", encoding="utf-8") as f:
+        json.dump(memory, f, ensure_ascii=False, indent=2)
+
+
+def map_mode_to_phase_key(mode: str) -> Optional[str]:
+    """
+    Normalise mode and map it to an internal phase key
+    ('phase_0'..'phase_4'), handling legacy modes.
+    """
+    normalized = (mode or "").strip().lower()
+
+    if normalized == "new_exercise":
+        normalized = "phase_0"
+    elif normalized == "objectives":
+        normalized = "phase_1"
+    elif normalized == "design":
+        normalized = "phase_2"
+    elif normalized == "scenario_mel":
+        normalized = "phase_3"
+    elif normalized == "evaluation":
+        normalized = "phase_4"
+
+    if normalized in {"phase_0", "phase_1", "phase_2", "phase_3", "phase_4"}:
+        return normalized
+    return None
+
+
+PHASE_LABELS = {
+    "phase_0": "Phase 0 – Entry & Orchestration",
+    "phase_1": "Phase 1 – Analysis & Objectives",
+    "phase_2": "Phase 2 – Exercise / Game Design",
+    "phase_3": "Phase 3 – Scenario, MEL & Materials",
+    "phase_4": "Phase 4 – Evaluation & Improvement",
+}
+
+
+def build_project_memory_context(project_id: str) -> Optional[str]:
+    """
+    Build a compact system message from the stored project memory.
+    """
+    memory = load_project_memory(project_id)
+
+    # check if there is anything at all
+    has_content = any(
+        isinstance(memory.get(k), list) and memory.get(k) for k in PHASE_LABELS.keys()
+    )
+    if not has_content:
+        return None
+
+    parts: List[str] = [
+        "For this exercise project, SmartEx has stored internal memory notes from previous steps.",
+        "Use these notes to stay consistent with past decisions and avoid restarting from zero.",
+        ""
+    ]
+
+    for key, label in PHASE_LABELS.items():
+        items = memory.get(key, [])
+        if not isinstance(items, list) or not items:
+            continue
+
+        # limit to last N items per phase to control prompt size
+        last_items = items[-8:]
+
+        parts.append(label + ":")
+        for bullet in last_items:
+            parts.append(f"- {bullet}")
+        parts.append("")
+
+    return "\n".join(parts)
+
+
+def update_project_memory_from_reply(
+    client: OpenAI, project_id: str, mode: str, reply_text: str
+) -> None:
+    """
+    After each assistant reply, create very short memory notes and
+    store them under the appropriate phase for this project.
+    """
+    phase_key = map_mode_to_phase_key(mode)
+    if phase_key is None:
+        return
+
+    text = (reply_text or "").strip()
+    if len(text) < 40:
+        # too short, probably not worth storing
+        return
+
+    phase_label = PHASE_LABELS.get(phase_key, phase_key)
+
+    system_msg = (
+        "You are an assistant that compresses the reply of an emergency exercise design "
+        "assistant (SmartEx) into short, persistent memory notes. "
+        "These notes will be reused later to keep the exercise design consistent.\n\n"
+        "Rules:\n"
+        "- Write 1 to 5 very short bullet points.\n"
+        "- Focus on stable decisions, objectives, exercise structures, key scenario elements, "
+        "or important constraints that will remain valid later.\n"
+        "- Do NOT repeat all details; be concise.\n"
+        "- If there is truly nothing relevant to store, output exactly: NO_MEMORY."
+    )
+
+    user_msg = (
+        f"Current phase: {phase_label}.\n\n"
+        f"Assistant reply:\n{reply_text}\n\n"
+        "Now produce the memory notes as described."
+    )
+
+    try:
+        resp = client.chat.completions.create(
+            model=DEFAULT_MODEL,
+            messages=[
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_msg},
+            ],
+            temperature=0.1,
+        )
+        mem_text = (resp.choices[0].message.content or "").strip()
+    except Exception:
+        return
+
+    if not mem_text:
+        return
+    if mem_text.strip().upper() == "NO_MEMORY":
+        return
+
+    lines = [ln.strip() for ln in mem_text.splitlines() if ln.strip()]
+    bullets: List[str] = []
+
+    for line in lines:
+        if line.upper() == "NO_MEMORY":
+            return
+        if line.startswith("-"):
+            line = line[1:].strip()
+        # remove leading numbering if present (e.g., "1. text")
+        if line[:2].isdigit() and line[1] == ".":
+            line = line[2:].strip()
+        if line:
+            bullets.append(line)
+
+    if not bullets:
+        return
+
+    memory = load_project_memory(project_id)
+    phase_list = memory.get(phase_key)
+    if not isinstance(phase_list, list):
+        phase_list = []
+    phase_list.extend(bullets)
+    # keep only last 30 entries per phase
+    phase_list = phase_list[-30:]
+    memory[phase_key] = phase_list
+    memory["last_updated"] = datetime.utcnow().isoformat() + "Z"
+    save_project_memory(project_id, memory)
+
+
+# -----------------------------
 # Mode instructions
 # -----------------------------
 
@@ -391,6 +578,7 @@ def build_mode_instruction(mode: str) -> str:
         "or Phase 4 (Evaluation & Improvement), then proceed accordingly."
     )
 
+
 # -----------------------------
 # FastAPI app setup
 # -----------------------------
@@ -427,9 +615,10 @@ def chat(request: ChatRequest) -> ChatResponse:
         project_name = request.project.name.strip()
     project_id = get_project_id(project_name)
 
-    # Build additional context: global KB, uploaded docs, project info
+    # Build additional context: global KB, uploaded docs, project info, project memory
     global_kb_ctx = build_global_kb_context()
     uploaded_docs_ctx = build_uploaded_docs_context(project_id)
+    project_memory_ctx = build_project_memory_context(project_id)
 
     project_ctx = None
     if request.project:
@@ -456,6 +645,8 @@ def chat(request: ChatRequest) -> ChatResponse:
         messages.append({"role": "system", "content": global_kb_ctx})
     if uploaded_docs_ctx:
         messages.append({"role": "system", "content": uploaded_docs_ctx})
+    if project_memory_ctx:
+        messages.append({"role": "system", "content": project_memory_ctx})
     if project_ctx:
         messages.append({"role": "system", "content": project_ctx})
 
@@ -471,6 +662,13 @@ def chat(request: ChatRequest) -> ChatResponse:
     )
 
     reply_text = response.choices[0].message.content or ""
+
+    # Update project memory based on this reply (best-effort, errors ignored)
+    try:
+        update_project_memory_from_reply(client, project_id, request.mode, reply_text)
+    except Exception:
+        pass
+
     return ChatResponse(reply=reply_text)
 
 
@@ -501,7 +699,6 @@ async def upload(
     except Exception:
         raw_text = ""
 
-    summary = ""
     if raw_text.strip():
         summary = summarise_uploaded_document(client, safe_filename, raw_text)
     else:
