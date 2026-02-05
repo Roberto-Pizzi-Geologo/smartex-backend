@@ -84,7 +84,7 @@ Special guidance for Phase 0:
 - Do not start designing objectives, scenarios or MEL in Phase 0: only collect information and orient the user.
 """
 
-DEFAULT_MODEL = "gpt-4o-mini"
+DEFAULT_MODEL = "gpt-5.1"
 
 BASE_DIR = Path(__file__).resolve().parent
 GLOBAL_KB_PATH = BASE_DIR / "global_kb.json"
